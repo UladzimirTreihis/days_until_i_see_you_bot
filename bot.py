@@ -74,13 +74,18 @@ async def send_daily_message():
 async def set_webhook():
     """Sets the webhook only if it is not already set"""
     webhook_info = await application.bot.get_webhook_info()
-
     if webhook_info.url != WEBHOOK_URL:
-        print(f"Setting webhook to: {WEBHOOK_URL}")
+        logging.info(f"Setting webhook to: {WEBHOOK_URL}")
         await application.bot.set_webhook(WEBHOOK_URL)
     else:
-        print("Webhook is already set. Skipping...")
+        logging.info("Webhook is already set. Skipping...")
 
+
+async def run():
+    """Starts the bot with webhook mode"""
+    await set_webhook()
+    await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
+    asyncio.create_task(send_daily_message())  # Background task
 
 def main():
     global application
@@ -88,22 +93,15 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
 
-    async def run():
-        """Starts the bot with webhook mode"""
-        await set_webhook()
-        await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
-        asyncio.create_task(send_daily_message())  # Background task
-
     print(f"Running in {'PRODUCTION' if PRODUCTION else 'DEVELOPMENT'} mode")
 
-    try:
-        asyncio.run(run())  # This works correctly in Railway
-    except RuntimeError:
-        print("RuntimeError: Event loop already running. Using create_task instead.")
-        loop = asyncio.get_event_loop()
+    loop = asyncio.get_event_loop()
+
+    if loop.is_running():
+        logging.warning("Event loop is already running. Using `create_task` instead.")
         loop.create_task(run())
-
-
+    else:
+        loop.run_until_complete(run())
 
 if __name__ == "__main__":
     main()
