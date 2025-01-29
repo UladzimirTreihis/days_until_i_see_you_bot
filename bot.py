@@ -1,4 +1,5 @@
 import asyncio
+import nest_asyncio
 import logging
 import os
 from datetime import datetime, timedelta
@@ -10,6 +11,9 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")  # Your channel ID
+if CHANNEL_ID and CHANNEL_ID.startswith("-100"):
+    CHANNEL_ID = int(CHANNEL_ID)
+PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
 
 # Global variable to store the target date
 target_date = None  # Format: datetime object
@@ -22,8 +26,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hello! Send me a date (dd-mm-yyyy) to start the countdown or 'None' to reset.")
 
 async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles input for countdown date"""
+    """Restricts input to only the channel admin"""
     global target_date
+
+    # Check if the sender is an admin
+    user_id = update.message.from_user.id
+    chat_member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+
+    if chat_member.status not in ["administrator", "creator"]:
+        await update.message.reply_text("You are not authorized to set the date.")
+        return
 
     text = update.message.text.strip()
     if text.lower() == "none":
@@ -35,6 +47,7 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Countdown set to {target_date.strftime('%d-%m-%Y')}.")
         except ValueError:
             await update.message.reply_text("Invalid format! Please use dd-mm-yyyy.")
+
 
 async def send_daily_message():
     """Sends the daily countdown message at 00:00"""
@@ -57,18 +70,32 @@ async def send_daily_message():
             logging.error(f"Failed to send message: {e}")
 
 def main():
-    """Main bot loop"""
     global application
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, set_date))
 
-    # Start the background task
-    asyncio.create_task(send_daily_message())
+    async def run():
+        asyncio.create_task(send_daily_message())  # Background task
+        await application.run_polling(500)
 
-    logging.info("Bot started...")
-    application.run_polling()
+    if PRODUCTION:
+        print("Running in PRODUCTION mode")
+        asyncio.run(run())  # Works in Railway
+    else:
+        print("Running in DEVELOPMENT mode (using nest_asyncio)")
+        nest_asyncio.apply()
+        loop = asyncio.get_event_loop()
+
+        try:
+            if loop.is_running():
+                loop.create_task(run())  # For Jupyter/Anaconda environments
+            else:
+                loop.run_until_complete(run())  # Standard environments
+        except RuntimeError as e:
+            print(f"RuntimeError caught: {e}")
+
 
 if __name__ == "__main__":
     main()
