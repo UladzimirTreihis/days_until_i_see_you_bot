@@ -14,6 +14,8 @@ CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")  # Your channel ID
 if CHANNEL_ID and CHANNEL_ID.startswith("-100"):
     CHANNEL_ID = int(CHANNEL_ID)
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
+WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Replace with your actual URL
+
 
 # Global variable to store the target date
 target_date = None  # Format: datetime object
@@ -69,38 +71,38 @@ async def send_daily_message():
         except Exception as e:
             logging.error(f"Failed to send message: {e}")
 
-async def run():
-    """Starts the bot with webhook mode"""
-    WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Replace with your actual URL
+async def set_webhook():
+    """Sets the webhook only if it is not already set"""
+    webhook_info = await application.bot.get_webhook_info()
 
+    if webhook_info.url != WEBHOOK_URL:
+        print(f"Setting webhook to: {WEBHOOK_URL}")
+        await application.bot.set_webhook(WEBHOOK_URL)
+    else:
+        print("Webhook is already set. Skipping...")
+
+
+def main():
     global application
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
 
-    # Set the webhook
-    await application.bot.set_webhook(WEBHOOK_URL)
+    async def run():
+        """Starts the bot with webhook mode"""
+        await set_webhook()
+        await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
+        asyncio.create_task(send_daily_message())  # Background task
 
-    # Start the webhook server
-    await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
-
-    # Start the background task for daily messages
-    asyncio.create_task(send_daily_message())
-
-
-def main():
     print(f"Running in {'PRODUCTION' if PRODUCTION else 'DEVELOPMENT'} mode")
 
-    loop = asyncio.new_event_loop()  # Create a fresh event loop
-    asyncio.set_event_loop(loop)
-
     try:
-        loop.run_until_complete(run())  # Keep the event loop running
+        asyncio.run(run())  # This works correctly in Railway
     except RuntimeError:
-        print("RuntimeError: Event loop is closed. Creating a new loop.")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(run())
+        print("RuntimeError: Event loop already running. Using create_task instead.")
+        loop = asyncio.get_event_loop()
+        loop.create_task(run())
+
 
 
 if __name__ == "__main__":
