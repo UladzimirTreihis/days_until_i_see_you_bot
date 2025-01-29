@@ -1,59 +1,77 @@
+# main.py
+
 import os
 import logging
 import asyncio
-import threading
 from datetime import datetime, timedelta
-from flask import Flask, request
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from dotenv import load_dotenv
-import time
-import sys
 import traceback
+import sys
 
-# Load environment variables
+from fastapi import FastAPI, Request, HTTPException
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+from dotenv import load_dotenv
+
+# Load environment variables from .env
 load_dotenv()
+
+# Retrieve environment variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-if CHANNEL_ID and CHANNEL_ID.startswith("-100"):
-    CHANNEL_ID = int(CHANNEL_ID)
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
-PORT = int(os.getenv("PORT", 8080))  # Default to 8080 if not set
 
-WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Change this
+# Verify essential environment variables
+if not TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN is not set in the environment.")
+if not CHANNEL_ID:
+    raise ValueError("TELEGRAM_CHANNEL_ID is not set in the environment.")
 
-# Logging setup
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+# Convert CHANNEL_ID to integer if it's a numeric string
+if CHANNEL_ID.startswith("-100"):
+    CHANNEL_ID = int(CHANNEL_ID)
 
-# Flask app
-app = Flask(__name__)
+# Define the webhook URL based on production status
+if PRODUCTION:
+    WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"
+else:
+    # For local testing, use ngrok or a similar service to expose your localhost
+    WEBHOOK_URL = "https://your-ngrok-url.ngrok.io/webhook"
 
-# Telegram application
+# Setup logging
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI
+app = FastAPI()
+
+# Initialize the Telegram Application
 application = Application.builder().token(TOKEN).build()
 
-# Global variable for target date
-target_date = None  # Will store the countdown target
+# Global variable to store the target date
+target_date = None  # Format: datetime object
 
-@app.route("/", methods=["GET"])
-def index():
-    return "Bot is running!", 200
 
-@app.route("/webhook", methods=["POST"])
-async def webhook():
-    """Handles incoming Telegram updates"""
-    update = Update.de_json(request.get_json(), application.bot)
-    await application.process_update(update)
-    return "OK", 200
-
+# Define command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /start command"""
-    await update.message.reply_text("Hello! Send me a date (dd-mm-yyyy) to start the countdown or 'None' to reset.")
+    """Handles the /start command."""
+    await update.message.reply_text(
+        "Hello! Send me a date (dd-mm-yyyy) to start the countdown or 'None' to reset."
+    )
+
 
 async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Restricts input to only the channel admin"""
+    """Handles setting the countdown date, restricted to channel admins."""
     global target_date
 
-    # Check if the sender is an admin
+    # Check if the user is an admin
     user_id = update.message.from_user.id
     chat_member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
 
@@ -68,67 +86,100 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         try:
             target_date = datetime.strptime(text, "%d-%m-%Y")
-            await update.message.reply_text(f"Countdown set to {target_date.strftime('%d-%m-%Y')}.")
+            await update.message.reply_text(
+                f"Countdown set to {target_date.strftime('%d-%m-%Y')}."
+            )
         except ValueError:
             await update.message.reply_text("Invalid format! Please use dd-mm-yyyy.")
 
+
+# Register handlers
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, set_date))
+
+
 async def send_daily_message():
-    """Sends the daily countdown message at 00:00"""
+    """Background task to send daily countdown messages at midnight."""
     global target_date
     while True:
         now = datetime.now()
-        next_run = datetime(now.year, now.month, now.day) + timedelta(days=1)
-        await asyncio.sleep((next_run - now).total_seconds())  # Sleep until midnight
-        
+        # Calculate time until next midnight
+        next_run = datetime(
+            year=now.year, month=now.month, day=now.day
+        ) + timedelta(days=1)
+        sleep_duration = (next_run - now).total_seconds()
+        await asyncio.sleep(sleep_duration)
+
         if target_date:
             days_left = (target_date - datetime.now().date()).days
-            message = str(max(0, days_left))  # Ensure non-negative output
+            message = str(max(0, days_left))  # Ensure non-negative
         else:
-            message = "∞"  # No date set
-        
-        logging.info(f"Posting to channel: {message}")
+            message = "∞"
+
+        logger.info(f"Posting to channel: {message}")
         try:
             await application.bot.send_message(chat_id=CHANNEL_ID, text=message)
         except Exception as e:
-            logging.error(f"Failed to send message: {e}")
+            logger.error(f"Failed to send message: {e}")
+
 
 async def set_webhook():
-    """Sets the webhook only if it is not already set"""
+    """Sets the webhook if it's not already set."""
     webhook_info = await application.bot.get_webhook_info()
     if webhook_info.url != WEBHOOK_URL:
-        logging.info(f"Setting webhook to: {WEBHOOK_URL}")
+        logger.info(f"Setting webhook to: {WEBHOOK_URL}")
         await application.bot.set_webhook(WEBHOOK_URL)
     else:
-        logging.info("Webhook is already set. Skipping...")
+        logger.info("Webhook is already set. Skipping...")
 
-def start_background_task():
-    """Runs the send_daily_message task in a separate thread"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(send_daily_message())
+
+@app.on_event("startup")
+async def on_startup():
+    """Runs on application startup."""
+    # Set the webhook
+    await set_webhook()
+
+    # Start the background task
+    asyncio.create_task(send_daily_message())
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    """Runs on application shutdown."""
+    logger.info("Shutting down bot...")
+    await application.shutdown()
+    await application.cleanup()
+
+
+@app.post("/webhook")
+async def webhook_handler(request: Request):
+    """Handles incoming webhook updates from Telegram."""
+    try:
+        update = Update.de_json(await request.json(), application.bot)
+        await application.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
+        return HTTPException(status_code=500, detail="Internal Server Error")
+
+
+@app.get("/")
+async def root():
+    """Health check endpoint."""
+    return {"message": "Bot is running!"}
+
 
 def main():
-    """Starts the bot"""
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, set_date))
+    """Entry point to run the bot."""
+    try:
+        asyncio.run(application.initialize())
+        asyncio.run(application.start())
+        logger.info("Bot started successfully.")
+        # Uvicorn will run the FastAPI app, so no need to block here
+    except Exception as e:
+        logger.error(f"Failed to start the bot: {e}")
+        traceback.print_exc(file=sys.stdout)
 
-    # Set webhook before running Flask
-    asyncio.run(set_webhook())
-
-    # Start background task for daily messages
-    threading.Thread(target=start_background_task, daemon=True).start()
-
-    # Run Flask
-    app.run(host="0.0.0.0", port=PORT)
-
-    # Prevent Railway from shutting down
-    while True:
-        time.sleep(10)
 
 if __name__ == "__main__":
-    try:
-        print("Starting Flask app...!")
-        main()
-    except Exception as e:
-        print(f"Error: {e}")
-        traceback.print_exc(file=sys.stdout)
+    main()
