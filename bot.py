@@ -88,16 +88,21 @@ def main():
         await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
         asyncio.create_task(send_daily_message())  # Background task
 
-    nest_asyncio.apply()
-    loop = asyncio.get_event_loop()
+    if PRODUCTION:
+        print("Running in PRODUCTION mode")
+        asyncio.run(run()) 
+    else:
+        print("Running in DEVELOPMENT mode")
+        nest_asyncio.apply()
+        loop = asyncio.get_event_loop()
 
-    try:
-        if loop.is_running():
-            loop.create_task(run())  # For Jupyter/Anaconda environments
-        else:
-            loop.run_until_complete(run())  # Standard environments
-    except RuntimeError as e:
-        print(f"RuntimeError caught: {e}")
+        try:
+            if loop.is_running():
+                loop.create_task(run())  # For Jupyter/Anaconda environments
+            else:
+                loop.run_until_complete(run())  # Standard environments
+        except RuntimeError as e:
+            print(f"RuntimeError caught: {e}")
 
 
 if __name__ == "__main__":
