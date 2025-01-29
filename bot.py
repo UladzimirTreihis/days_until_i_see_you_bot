@@ -15,6 +15,7 @@ CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 if CHANNEL_ID and CHANNEL_ID.startswith("-100"):
     CHANNEL_ID = int(CHANNEL_ID)
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
+PORT = int(os.getenv("PORT", 8080))  # Default to 8080 if not set
 
 WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Change this
 
@@ -115,7 +116,7 @@ def main():
     threading.Thread(target=start_background_task, daemon=True).start()
 
     # Run Flask
-    app.run(host="0.0.0.0", port=3000)
+    app.run(host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
     main()
