@@ -91,10 +91,11 @@ def main():
     if PRODUCTION:
         print("Running in PRODUCTION mode")
         try:
-            asyncio.run(run())  # This works in a fresh Railway container
+            asyncio.run(run())  # Works in Railway if a new event loop is needed
         except RuntimeError:
-            loop = asyncio.get_event_loop()
-            loop.create_task(run())  # Alternative for Railway environments that already have an event loop
+            loop = asyncio.new_event_loop()  # Create a new loop if necessary
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(run())
     else:
         print("Running in DEVELOPMENT mode")
         nest_asyncio.apply()  # Needed for Jupyter/Anaconda
