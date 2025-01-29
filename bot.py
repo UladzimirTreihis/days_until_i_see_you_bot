@@ -69,36 +69,35 @@ async def send_daily_message():
         except Exception as e:
             logging.error(f"Failed to send message: {e}")
 
-def main():
+async def run():
+    """Starts the bot with webhook mode"""
+    WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Replace with your actual URL
+
     global application
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, set_date))
 
-    WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Replace this with your actual URL
+    # Set the webhook
+    await application.bot.set_webhook(WEBHOOK_URL)
 
-    async def set_webhook():
-        """Sets up the webhook so Telegram knows where to send updates"""
-        await application.bot.set_webhook(WEBHOOK_URL)
+    # Start the webhook server
+    await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
+
+    # Start the background task for daily messages
+    asyncio.create_task(send_daily_message())
 
 
-    async def run():
-        await set_webhook()
-        await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
-        asyncio.create_task(send_daily_message())  # Background task
+def main():
+    print(f"Running in {'PRODUCTION' if PRODUCTION else 'DEVELOPMENT'} mode")
 
-    if PRODUCTION:
-        print("Running in PRODUCTION mode")
-        try:
-            asyncio.run(run())  # Works in Railway if a new event loop is needed
-        except RuntimeError:
-            loop = asyncio.new_event_loop()  # Create a new loop if necessary
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(run())
-    else:
-        print("Running in DEVELOPMENT mode")
-        nest_asyncio.apply()  # Needed for Jupyter/Anaconda
+    loop = asyncio.new_event_loop()  # Create a fresh event loop
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(run())  # Keep the event loop running
+    except RuntimeError:
+        print("RuntimeError: Event loop is closed. Creating a new loop.")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(run())
