@@ -127,7 +127,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        print("Starting Flask app...")
+        print("Starting Flask app...!")
         main()
     except Exception as e:
         print(f"Error: {e}")
