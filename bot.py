@@ -1,30 +1,48 @@
-import asyncio
-import nest_asyncio
-import logging
 import os
+import logging
+import asyncio
+import threading
 from datetime import datetime, timedelta
+from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 
-# Load token from .env file
+# Load environment variables
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")  # Your channel ID
+CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 if CHANNEL_ID and CHANNEL_ID.startswith("-100"):
     CHANNEL_ID = int(CHANNEL_ID)
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
-WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Replace with your actual URL
 
-
-# Global variable to store the target date
-target_date = None  # Format: datetime object
+WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Change this
 
 # Logging setup
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+# Flask app
+app = Flask(__name__)
+
+# Telegram application
+application = Application.builder().token(TOKEN).build()
+
+# Global variable for target date
+target_date = None  # Will store the countdown target
+
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot is running!", 200
+
+@app.route("/webhook", methods=["POST"])
+async def webhook():
+    """Handles incoming Telegram updates"""
+    update = Update.de_json(request.get_json(), application.bot)
+    await application.process_update(update)
+    return "OK", 200
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command: /start - Welcome message"""
+    """Handles /start command"""
     await update.message.reply_text("Hello! Send me a date (dd-mm-yyyy) to start the countdown or 'None' to reset.")
 
 async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,7 +67,6 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Countdown set to {target_date.strftime('%d-%m-%Y')}.")
         except ValueError:
             await update.message.reply_text("Invalid format! Please use dd-mm-yyyy.")
-
 
 async def send_daily_message():
     """Sends the daily countdown message at 00:00"""
@@ -80,28 +97,25 @@ async def set_webhook():
     else:
         logging.info("Webhook is already set. Skipping...")
 
-
-async def run():
-    """Starts the bot with webhook mode"""
-    await set_webhook()
-    await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
-    asyncio.create_task(send_daily_message())  # Background task
+def start_background_task():
+    """Runs the send_daily_message task in a separate thread"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(send_daily_message())
 
 def main():
-    global application
-    application = Application.builder().token(TOKEN).build()
-
+    """Starts the bot"""
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, set_date))
 
-    print(f"Running in {'PRODUCTION' if PRODUCTION else 'DEVELOPMENT'} mode")
+    # Set webhook before running Flask
+    asyncio.run(set_webhook())
 
-    loop = asyncio.get_event_loop()
+    # Start background task for daily messages
+    threading.Thread(target=start_background_task, daemon=True).start()
 
-    if loop.is_running():
-        logging.warning("Event loop is already running. Using `create_task` instead.")
-        loop.create_task(run())
-    else:
-        loop.run_until_complete(run())
+    # Run Flask
+    app.run(host="0.0.0.0", port=3000)
 
 if __name__ == "__main__":
     main()
