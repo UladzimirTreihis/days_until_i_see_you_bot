@@ -76,15 +76,18 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, set_date))
 
-    async def run():
-        asyncio.create_task(send_daily_message())  # Background task
-        await application.run_polling(500)
+    WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"  # Replace this with your actual URL
 
-    # if PRODUCTION:
-    #     print("Running in PRODUCTION mode")
-    #     asyncio.run(run())  # Works in Railway
-    # else:
-    # print("Running in DEVELOPMENT mode (using nest_asyncio)")
+    async def set_webhook():
+        """Sets up the webhook so Telegram knows where to send updates"""
+        await application.bot.set_webhook(WEBHOOK_URL)
+
+
+    async def run():
+        await set_webhook()
+        await application.run_webhook(listen="0.0.0.0", port=3000, url_path="/webhook")
+        asyncio.create_task(send_daily_message())  # Background task
+
     nest_asyncio.apply()
     loop = asyncio.get_event_loop()
 
