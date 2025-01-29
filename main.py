@@ -4,8 +4,6 @@ import os
 import logging
 import asyncio
 from datetime import datetime, timedelta
-import traceback
-import sys
 
 from fastapi import FastAPI, Request, HTTPException
 from telegram import Update
@@ -26,6 +24,13 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
 
+# Define the webhook URL based on production status
+if PRODUCTION:
+    WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"
+else:
+    # For local testing, use ngrok or a similar service to expose your localhost
+    WEBHOOK_URL = "https://your-ngrok-url.ngrok.io/webhook"
+
 # Verify essential environment variables
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN is not set in the environment.")
@@ -36,16 +41,10 @@ if not CHANNEL_ID:
 if CHANNEL_ID.startswith("-100"):
     CHANNEL_ID = int(CHANNEL_ID)
 
-# Define the webhook URL based on production status
-if PRODUCTION:
-    WEBHOOK_URL = "https://daysuntiliseeyoubot-production.up.railway.app/webhook"
-else:
-    # For local testing, use ngrok or a similar service to expose your localhost
-    WEBHOOK_URL = "https://your-ngrok-url.ngrok.io/webhook"
-
 # Setup logging
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,  # Set to DEBUG for more detailed logs
 )
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,7 @@ app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
 # Global variable to store the target date
-target_date = None  # Format: datetime object
+target_date = None  # Will store the countdown target
 
 
 # Define command handlers
@@ -102,25 +101,28 @@ async def send_daily_message():
     """Background task to send daily countdown messages at midnight."""
     global target_date
     while True:
-        now = datetime.now()
-        # Calculate time until next midnight
-        next_run = datetime(
-            year=now.year, month=now.month, day=now.day
-        ) + timedelta(days=1)
-        sleep_duration = (next_run - now).total_seconds()
-        await asyncio.sleep(sleep_duration)
-
-        if target_date:
-            days_left = (target_date - datetime.now().date()).days
-            message = str(max(0, days_left))  # Ensure non-negative
-        else:
-            message = "∞"
-
-        logger.info(f"Posting to channel: {message}")
         try:
-            await application.bot.send_message(chat_id=CHANNEL_ID, text=message)
+            now = datetime.now()
+            # Calculate time until next midnight
+            next_run = datetime(year=now.year, month=now.month, day=now.day) + timedelta(days=1)
+            sleep_duration = (next_run - now).total_seconds()
+            logger.info(f"Sleeping for {sleep_duration} seconds until next run.")
+            await asyncio.sleep(sleep_duration)
+
+            if target_date:
+                days_left = (target_date - datetime.now().date()).days
+                message = str(max(0, days_left))  # Ensure non-negative output
+            else:
+                message = "∞"  # No date set
+
+            logger.info(f"Posting to channel: {message}")
+            try:
+                await application.bot.send_message(chat_id=CHANNEL_ID, text=message)
+            except Exception as e:
+                logger.error(f"Failed to send message: {e}")
         except Exception as e:
-            logger.error(f"Failed to send message: {e}")
+            logger.error(f"Error in send_daily_message: {e}")
+            await asyncio.sleep(60)  # Wait 1 minute before retrying to prevent tight loop
 
 
 async def set_webhook():
@@ -136,17 +138,19 @@ async def set_webhook():
 @app.on_event("startup")
 async def on_startup():
     """Runs on application startup."""
-    # Set the webhook
+    logger.info("Starting up: Initializing and starting Telegram application.")
+    await application.initialize()
+    await application.start()
     await set_webhook()
-
-    # Start the background task
     asyncio.create_task(send_daily_message())
+    logger.info("Telegram application started and webhook set.")
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
     """Runs on application shutdown."""
     logger.info("Shutting down bot...")
+    await application.stop()
     await application.shutdown()
     await application.cleanup()
 
@@ -156,30 +160,15 @@ async def webhook_handler(request: Request):
     """Handles incoming webhook updates from Telegram."""
     try:
         update = Update.de_json(await request.json(), application.bot)
+        logger.info(f"Received update: {update}")
         await application.process_update(update)
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Error processing update: {e}")
-        return HTTPException(status_code=500, detail="Internal Server Error")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
 @app.get("/")
-async def root():
+def read_root():
     """Health check endpoint."""
     return {"message": "Bot is running!"}
-
-
-def main():
-    """Entry point to run the bot."""
-    try:
-        asyncio.run(application.initialize())
-        asyncio.run(application.start())
-        logger.info("Bot started successfully.")
-        # Uvicorn will run the FastAPI app, so no need to block here
-    except Exception as e:
-        logger.error(f"Failed to start the bot: {e}")
-        traceback.print_exc(file=sys.stdout)
-
-
-if __name__ == "__main__":
-    main()
