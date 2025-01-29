@@ -90,7 +90,11 @@ def main():
 
     if PRODUCTION:
         print("Running in PRODUCTION mode")
-        asyncio.run(run()) 
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(run())  # Use `create_task` for Railway
+        else:
+            loop.run_until_complete(run())  # Normal environments
     else:
         print("Running in DEVELOPMENT mode")
         nest_asyncio.apply()
