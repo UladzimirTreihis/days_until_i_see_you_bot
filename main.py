@@ -76,20 +76,26 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat_member.status not in ["administrator", "creator"]:
         await update.message.reply_text("You are not authorized to set the date.")
+        logger.info(f"Unauthorized user {user_id} attempted to set date.")
         return
 
     text = update.message.text.strip()
+    logger.info(f"User {user_id} submitted date input: {text}")
+
     if text.lower() == "none":
         target_date = None
         await update.message.reply_text("Countdown reset. Future posts will show ∞.")
+        logger.info(f"Countdown reset by user {user_id}.")
     else:
         try:
             target_date = datetime.strptime(text, "%d-%m-%Y")
             await update.message.reply_text(
                 f"Countdown set to {target_date.strftime('%d-%m-%Y')}."
             )
+            logger.info(f"Countdown set to {target_date} by user {user_id}.")
         except ValueError:
             await update.message.reply_text("Invalid format! Please use dd-mm-yyyy.")
+            logger.warning(f"User {user_id} submitted invalid date format: {text}")
 
 
 # Register handlers
@@ -160,7 +166,7 @@ async def webhook_handler(request: Request):
     """Handles incoming webhook updates from Telegram."""
     try:
         update = Update.de_json(await request.json(), application.bot)
-        logger.info(f"Received update: {update}")
+        logger.info(f"Received update: {update.to_dict()}")
         await application.process_update(update)
         return {"status": "ok"}
     except Exception as e:
