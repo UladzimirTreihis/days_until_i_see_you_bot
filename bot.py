@@ -7,6 +7,9 @@ from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
+import time
+import sys
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -118,5 +121,14 @@ def main():
     # Run Flask
     app.run(host="0.0.0.0", port=PORT)
 
+    # Prevent Railway from shutting down
+    while True:
+        time.sleep(10)
+
 if __name__ == "__main__":
-    main()
+    try:
+        print("Starting Flask app...")
+        main()
+    except Exception as e:
+        print(f"Error: {e}")
+        traceback.print_exc(file=sys.stdout)
