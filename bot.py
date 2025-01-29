@@ -80,21 +80,21 @@ def main():
         asyncio.create_task(send_daily_message())  # Background task
         await application.run_polling(500)
 
-    if PRODUCTION:
-        print("Running in PRODUCTION mode")
-        asyncio.run(run())  # Works in Railway
-    else:
-        print("Running in DEVELOPMENT mode (using nest_asyncio)")
-        nest_asyncio.apply()
-        loop = asyncio.get_event_loop()
+    # if PRODUCTION:
+    #     print("Running in PRODUCTION mode")
+    #     asyncio.run(run())  # Works in Railway
+    # else:
+    # print("Running in DEVELOPMENT mode (using nest_asyncio)")
+    nest_asyncio.apply()
+    loop = asyncio.get_event_loop()
 
-        try:
-            if loop.is_running():
-                loop.create_task(run())  # For Jupyter/Anaconda environments
-            else:
-                loop.run_until_complete(run())  # Standard environments
-        except RuntimeError as e:
-            print(f"RuntimeError caught: {e}")
+    try:
+        if loop.is_running():
+            loop.create_task(run())  # For Jupyter/Anaconda environments
+        else:
+            loop.run_until_complete(run())  # Standard environments
+    except RuntimeError as e:
+        print(f"RuntimeError caught: {e}")
 
 
 if __name__ == "__main__":
