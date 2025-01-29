@@ -90,23 +90,17 @@ def main():
 
     if PRODUCTION:
         print("Running in PRODUCTION mode")
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(run())  # Use `create_task` for Railway
-        else:
-            loop.run_until_complete(run())  # Normal environments
+        try:
+            asyncio.run(run())  # This works in a fresh Railway container
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+            loop.create_task(run())  # Alternative for Railway environments that already have an event loop
     else:
         print("Running in DEVELOPMENT mode")
-        nest_asyncio.apply()
-        loop = asyncio.get_event_loop()
-
-        try:
-            if loop.is_running():
-                loop.create_task(run())  # For Jupyter/Anaconda environments
-            else:
-                loop.run_until_complete(run())  # Standard environments
-        except RuntimeError as e:
-            print(f"RuntimeError caught: {e}")
+        nest_asyncio.apply()  # Needed for Jupyter/Anaconda
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run())
 
 
 if __name__ == "__main__":
