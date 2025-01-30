@@ -1,4 +1,5 @@
 {
     "intervals": [27],
-    "last_event_date": "2025-01-19"
+    "last_event_date": "2025-01-19",
+    "target_date": null
 }

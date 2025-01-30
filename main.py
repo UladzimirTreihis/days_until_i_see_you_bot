@@ -5,6 +5,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 import json
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, HTTPException
 from telegram import Update
@@ -20,6 +21,12 @@ import aiofiles
 
 # Load environment variables from .env
 load_dotenv()
+
+# Set timezone 
+EUROPE_TZ = ZoneInfo("Europe/Berlin")
+
+# Define the path to data.json in the mounted volume
+DATA_FILE = "/data/data.json"
 
 # Retrieve environment variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -56,31 +63,40 @@ app = FastAPI()
 # Initialize the Telegram Application
 application = Application.builder().token(TOKEN).build()
 
-# Path to the JSON file
-DATA_FILE = "data.json"
-
-# Helper functions for reading and writing JSON data
-async def read_data():
-    """Reads data from the JSON file asynchronously."""
-    try:
-        async with aiofiles.open(DATA_FILE, mode='r') as f:
-            content = await f.read()
-            data = json.loads(content)
-            return data
-    except FileNotFoundError:
-        # If the file doesn't exist, return default structure
-        return {"intervals": [], "last_event_date": None}
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error: {e}")
-        return {"intervals": [], "last_event_date": None}
+# Helper functions for writing JSON data
 
 async def write_data(data):
     """Writes data to the JSON file asynchronously."""
     async with aiofiles.open(DATA_FILE, mode='w') as f:
         await f.write(json.dumps(data, indent=4))
 
-# Global variable to store the target date
-target_date = None  # Will store the countdown target
+# Helper functions for reading JSON data
+async def read_data():
+    """Reads data from the JSON file asynchronously."""
+    try:
+        async with aiofiles.open(DATA_FILE, mode='r') as f:
+            content = await f.read()
+            data = json.loads(content)
+            # Ensure all required keys are present
+            if 'intervals' not in data:
+                data['intervals'] = []
+            if 'last_event_date' not in data:
+                data['last_event_date'] = None
+            if 'target_date' not in data:
+                data['target_date'] = None
+            return data
+    except FileNotFoundError:
+        # If the file doesn't exist, return default structure
+        logger.info(f"{DATA_FILE} not found. Creating a new one.")
+        data = {"intervals": [], "last_event_date": None, "target_date": None}
+        await write_data(data)
+        return data
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {e}")
+        # Optionally, reset the data
+        data = {"intervals": [], "last_event_date": None, "target_date": None}
+        await write_data(data)
+        return data
 
 # Define command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -92,8 +108,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles setting the countdown date, restricted to channel admins."""
-    global target_date
-
     user_id = update.message.from_user.id
     try:
         chat_member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
@@ -111,80 +125,181 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"User {user_id} submitted date input: {text}")
 
     data = await read_data()
+    logger.info(f"Current data: {data}")
 
     if text.lower() == "none":
-        target_date = None
-        await update.message.reply_text("Countdown reset. Future posts will show ∞.")
+        data['target_date'] = None
+        data['last_event_date'] = None
+        await write_data(data)
+        await update.message.reply_text("Countdown reset. Future posts will show the statistical message.")
         logger.info(f"Countdown reset by user {user_id}.")
     else:
         try:
             new_target_date = datetime.strptime(text, "%d-%m-%Y").date()
-            if new_target_date < datetime.now().date():
+            current_date = datetime.now(tz=EUROPE_TZ).date()
+            if new_target_date < current_date:
                 await update.message.reply_text("The date must be in the future.")
                 logger.warning(f"User {user_id} tried to set a past date: {new_target_date}")
                 return
 
-            target_date = new_target_date
-            await update.message.reply_text(
-                f"Countdown set to {target_date.strftime('%d-%m-%Y')}."
-            )
-            logger.info(f"Countdown set to {target_date} by user {user_id}.")
-
-            # Optionally, reset last_event_date if setting a new date
-            # to prevent immediate interval counting
-            data['last_event_date'] = None
+            data['target_date'] = new_target_date.strftime("%Y-%m-%d")
+            data['last_event_date'] = None  # Reset to prevent immediate interval counting
             await write_data(data)
+            await update.message.reply_text(f"Countdown set to {new_target_date.strftime('%d-%m-%Y')}.")
+            logger.info(f"Countdown set to {new_target_date} by user {user_id}.")
         except ValueError:
-            await update.message.reply_text("Invalid format! Please use dd-mm-yyyy.")
+            await update.message.reply_text("Invalid format! Please use dd-mm-yyyy or 'none'.")
             logger.warning(f"User {user_id} submitted invalid date format: {text}")
 
-# Register handlers
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, set_date))
+async def print_data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to print data.json contents."""
+    user_id = update.message.from_user.id
+    try:
+        chat_member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+    except Exception as e:
+        await update.message.reply_text("Failed to verify your admin status.")
+        logger.error(f"Error fetching chat member: {e}")
+        return
+
+    if chat_member.status not in ["administrator", "creator"]:
+        await update.message.reply_text("You are not authorized to perform this action.")
+        logger.info(f"Unauthorized user {user_id} attempted to print data.")
+        return
+
+    data = await read_data()
+    data_str = json.dumps(data, indent=4)
+
+    # Telegram has a message character limit (~4096). Handle larger data accordingly.
+    if len(data_str) > 4000:
+        await update.message.reply_text("data.json is too large to display.")
+    else:
+        # Send as a code block for better readability
+        await update.message.reply_text(f"```\n{data_str}\n```", parse_mode="MarkdownV2")
+
+async def set_data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to set data.json with provided JSON."""
+    user_id = update.message.from_user.id
+    try:
+        chat_member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+    except Exception as e:
+        await update.message.reply_text("Failed to verify your admin status.")
+        logger.error(f"Error fetching chat member: {e}")
+        return
+
+    if chat_member.status not in ["administrator", "creator"]:
+        await update.message.reply_text("You are not authorized to perform this action.")
+        logger.info(f"Unauthorized user {user_id} attempted to set data.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /set_data <json>")
+        return
+
+    # Join all arguments to form the JSON string
+    json_str = ' '.join(context.args)
+    try:
+        data = json.loads(json_str)
+        # Validate required keys
+        required_keys = {"intervals", "last_event_date", "target_date"}
+        if not required_keys.issubset(data.keys()):
+            await update.message.reply_text(f"JSON must contain the following keys: {', '.join(required_keys)}.")
+            return
+        # Validate types
+        if not isinstance(data['intervals'], list):
+            await update.message.reply_text("'intervals' must be a list.")
+            return
+        if data['last_event_date'] is not None:
+            try:
+                datetime.strptime(data['last_event_date'], "%Y-%m-%d")
+            except ValueError:
+                await update.message.reply_text("'last_event_date' must be in 'YYYY-MM-DD' format or null.")
+                return
+        if data['target_date'] is not None:
+            try:
+                datetime.strptime(data['target_date'], "%Y-%m-%d")
+            except ValueError:
+                await update.message.reply_text("'target_date' must be in 'YYYY-MM-DD' format or null.")
+                return
+        # Overwrite data.json
+        await write_data(data)
+        await update.message.reply_text("data.json has been updated successfully.")
+        logger.info(f"data.json updated by user {user_id}.")
+    except json.JSONDecodeError as e:
+        await update.message.reply_text("Invalid JSON format.")
+        logger.error(f"User {user_id} provided invalid JSON: {e}")
+
+
+# Register handlers with appropriate filters
+application.add_handler(
+    CommandHandler("start", start, filters=filters.ChatType.PRIVATE)
+)
+application.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        set_date
+    )
+)
+
+# Register the /print_data command
+application.add_handler(
+    CommandHandler("print_data", print_data_command, filters=filters.ChatType.PRIVATE)
+)
+
+# Register the /set_data command
+application.add_handler(
+    CommandHandler("set_data", set_data_command, filters=filters.ChatType.PRIVATE)
+)
+
+# Define an error handler
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Log the error and send a message to notify the developer."""
+    logger.error(f"Exception while handling an update: {context.error}")
+
+# Register the error handler
+application.add_error_handler(error_handler)
 
 async def send_daily_message():
-    """Background task to send daily countdown messages at midnight."""
-    global target_date
+    """Background task to send daily countdown messages at midnight European time."""
     while True:
         try:
-            now = datetime.now()
-            # Calculate time until next midnight
-            next_run = datetime(year=now.year, month=now.month, day=now.day) + timedelta(days=1)
+            now = datetime.now(tz=EUROPE_TZ)
+            # Calculate time until next midnight in European time
+            next_run = datetime(year=now.year, month=now.month, day=now.day, tzinfo=EUROPE_TZ) + timedelta(days=1)
             sleep_duration = (next_run - now).total_seconds()
-            logger.info(f"Sleeping for {sleep_duration} seconds until next run.")
+            logger.info(f"Sleeping for {sleep_duration} seconds until next run (European midnight).")
             await asyncio.sleep(sleep_duration)
 
-            today = datetime.now().date()
+            today = datetime.now(tz=EUROPE_TZ).date()
+
+            data = await read_data()
+            target_date_str = data.get("target_date")
+            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date() if target_date_str else None
 
             if target_date and target_date == today:
                 # Handle event occurrence
-                data = await read_data()
-
-                if data['last_event_date'] == today:
-                    # Consecutive 0s; do not count
-                    logger.info("Event occurred again today without resetting target_date.")
-                else:
-                    if data['last_event_date']:
-                        last_event = datetime.strptime(data['last_event_date'], "%Y-%m-%d").date()
+                if data['last_event_date']:
+                    last_event = datetime.strptime(data['last_event_date'], "%Y-%m-%d").date()
+                    if last_event == today:
+                        # Consecutive 0s; do not count
+                        logger.info("Event occurred again today without resetting target_date.")
+                    else:
                         interval = (today - last_event).days
                         data['intervals'].append(interval)
                         logger.info(f"Event occurred. Interval since last event: {interval} days.")
-                    else:
-                        logger.info("First event occurrence recorded.")
-
-                    # Update last_event_date
+                        data['last_event_date'] = today.strftime("%Y-%m-%d")
+                        await write_data(data)
+                else:
+                    # First event occurrence
                     data['last_event_date'] = today.strftime("%Y-%m-%d")
                     await write_data(data)
+                    logger.info("First event occurrence recorded.")
 
-                # Reset target_date or set for the next event as per your logic
-                # For example, set to None to indicate no upcoming event
-                target_date = None
-
-                # Optionally, you can set a new target_date here automatically
+                # Reset target_date
+                data['target_date'] = None
+                await write_data(data)
 
             elif not target_date:
                 # Generate statistical message based on past intervals
-                data = await read_data()
                 intervals = data.get("intervals", [])
 
                 if intervals:
@@ -195,22 +310,12 @@ async def send_daily_message():
                     expected_time = n_days
 
                     # Poisson Distribution: Probability calculations
-                    # Assuming lambda_param is the rate per day
                     from math import exp
 
-                    from math import factorial
-
-                    def poisson_pmf(k, lam):
-                        return (lam ** k * exp(-lam)) / factorial(k)
-                    
-
-                    def poisson_cdf(k, lam):
-                        return sum(poisson_pmf(i, lam) for i in range(0, k+1))
-
-                    # Probability of at least one event in X days: 1 - P(0 events in X days)
                     def poisson_prob_at_least_one(lam, days):
                         return 1 - exp(-lam * days)
 
+                    # Calculating probabilities
                     days_prob = poisson_prob_at_least_one(lambda_param, 1) * 100  # Tomorrow
                     week_prob = poisson_prob_at_least_one(lambda_param, 7) * 100  # Within a week
                     month_prob = poisson_prob_at_least_one(lambda_param, 30) * 100  # Within a month

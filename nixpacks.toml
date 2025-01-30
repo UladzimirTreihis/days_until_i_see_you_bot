@@ -2,3 +2,8 @@
 
 [start]
 cmd = "gunicorn main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8080 --workers 1"
+
+# Specify the volume mount
+[plugins.volume]
+mount = "/data"  # This should match the mount path you set in Railway
+name = "data-volume"  # This should match the volume name you created
