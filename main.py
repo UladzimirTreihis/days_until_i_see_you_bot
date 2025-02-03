@@ -145,7 +145,6 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             data['target_date'] = new_target_date.strftime("%Y-%m-%d")
             # Only reset last_event_date when at the last zero
-            data['last_event_date'] = None  # Reset to prevent immediate interval counting
             await write_data(data)
             await update.message.reply_text(f"Countdown set to {new_target_date.strftime('%d-%m-%Y')}.")
             logger.info(f"Countdown set to {new_target_date} by user {user_id}.")
