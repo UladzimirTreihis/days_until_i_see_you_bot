@@ -129,7 +129,8 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text.lower() == "none":
         data['target_date'] = None
-        data['last_event_date'] = None
+        # DO not reset last_event_day when new event time unknown
+        # data['last_event_date'] = None
         await write_data(data)
         await update.message.reply_text("Countdown reset. Future posts will show the statistical message.")
         logger.info(f"Countdown reset by user {user_id}.")
@@ -143,6 +144,7 @@ async def set_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             data['target_date'] = new_target_date.strftime("%Y-%m-%d")
+            # Only reset last_event_date when at the last zero
             data['last_event_date'] = None  # Reset to prevent immediate interval counting
             await write_data(data)
             await update.message.reply_text(f"Countdown set to {new_target_date.strftime('%d-%m-%Y')}.")
@@ -270,19 +272,27 @@ async def send_daily_message():
             await asyncio.sleep(sleep_duration)
 
             today = datetime.now(tz=EUROPE_TZ).date()
+            yesterday = today - timedelta(days=1)
+            tomorrow = today + timedelta(days=1)
 
             data = await read_data()
             target_date_str = data.get("target_date")
             target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date() if target_date_str else None
 
             if target_date and target_date == today:
+                # Message 0!
+                # Set target date to tomorrow
+                # If last event date wasn't yesterday, add interval
+                #                                    , else reset last event_day to today
                 # Handle event occurrence
                 if data['last_event_date']:
                     last_event = datetime.strptime(data['last_event_date'], "%Y-%m-%d").date()
-                    if last_event == today:
+                    if last_event == today or last_event == yesterday:
                         # Consecutive 0s; do not count
-                        logger.info("Event occurred again today without resetting target_date.")
+                        data['last_event_date'] == today
+                        logger.info("Event occurred again, updated last_event_day.")
                     else:
+                        # New event in a long time, add interval
                         interval = (today - last_event).days
                         data['intervals'].append(interval)
                         logger.info(f"Event occurred. Interval since last event: {interval} days.")
@@ -294,9 +304,19 @@ async def send_daily_message():
                     await write_data(data)
                     logger.info("First event occurrence recorded.")
 
-                # Reset target_date
-                data['target_date'] = None
+                # Unless otherwise specified via message
+                # Assume the event happens tomorrow again
+                data['target_date'] = tomorrow
                 await write_data(data)
+
+                message = str(0)
+                logger.info(f"Posting 0 to channel: {message}")
+
+                try:
+                    await application.bot.send_message(chat_id=CHANNEL_ID, text=message)
+                    logger.info("Sent 0 message to channel.")
+                except Exception as e:
+                    logger.error(f"Failed to send 0 message: {e}")
 
             elif not target_date:
                 # Generate statistical message based on past intervals
