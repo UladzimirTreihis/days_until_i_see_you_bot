@@ -288,7 +288,7 @@ async def send_daily_message():
                     last_event = datetime.strptime(data['last_event_date'], "%Y-%m-%d").date()
                     if last_event == today or last_event == yesterday:
                         # Consecutive 0s; do not count
-                        data['last_event_date'] == today
+                        data['last_event_date'] == today.strftime("%Y-%m-%d")
                         logger.info("Event occurred again, updated last_event_day.")
                     else:
                         # New event in a long time, add interval
@@ -305,7 +305,7 @@ async def send_daily_message():
 
                 # Unless otherwise specified via message
                 # Assume the event happens tomorrow again
-                data['target_date'] = tomorrow
+                data['target_date'] = tomorrow.strftime("%Y-%m-%d")
                 await write_data(data)
 
                 message = str(0)
